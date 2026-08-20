@@ -1,0 +1,25 @@
+# runtime state
+*.db
+*.db-wal
+*.db-shm
+/sessions/
+/workspaces/
+
+# deps / build
+node_modules/
+dist/
+build/
+target/
+__pycache__/
+*.pyc
+.venv/
+
+# env
+.env
+.env.*
+!.env.example
+
+# editors / os
+.DS_Store
+.idea/
+.vscode/
