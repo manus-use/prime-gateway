@@ -48,15 +48,17 @@ permission requests. We don't reinvent it.
 ## Repo layout
 
 ```
-docs/architecture.md    full design document
-schema/001_initial.sql  event log + session schema
+docs/architecture.md         full design document
+docs/testing/durability.md   crash matrix for the durability contract
+schema/001_initial.sql       event log + session schema
 ```
 
 ## Reading order
 
 1. [`docs/architecture.md`](docs/architecture.md) §0–§2 — thesis and layer model
-2. §4 — the broker, which is where the durability guarantee actually lives
+2. §4 — the broker, and §4.6, the durability contract everything else rests on
 3. §15 — build order. Milestones 1–4 are the durability guarantee; do not reorder.
+4. [`docs/testing/durability.md`](docs/testing/durability.md) — what "it works" has to mean
 
 ## References
 

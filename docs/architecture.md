@@ -12,6 +12,22 @@
 
 Every design decision below follows from taking that literally.
 
+### Three tiers of durability
+
+They fail independently, and naming them separately is what makes the failure semantics
+tractable:
+
+| Tier | Owns | Fails when |
+|---|---|---|
+| **Logical** | event store · workspace · provider session ID · checkpoints · channel bindings | disk loss (only) |
+| **Execution** | broker · spool · runtime backend | host reboot without a restart policy |
+| **Agent** | provider-native resume, *or* transcript reconstruction | vendor expires the session; context is lost |
+
+The tiers degrade downward, not sideways. Agent durability can fail while logical and
+execution durability hold — that is a **degraded but correct** session (the conversation
+restarts cold, the history survives), not a lost one. Design so that this is the worst
+routine outcome.
+
 ---
 
 ## 1. Goals and non-goals
@@ -384,6 +400,117 @@ Newline-delimited JSON over unix socket. Deliberately not ACP — this is a diff
 ### 4.5 One broker per session
 
 Tempting alternative: pool brokers, multiplex ACP sessions (`multiplexed` agents support it). Rejected for v1 — one broker crash would take down N sessions, and blast radius is exactly what we're optimizing. Revisit only after measuring per-broker RSS.
+
+### 4.6 The durability contract
+
+Every strong guarantee in this document reduces to the invariants below. They are stated
+precisely because they are the part that must be right before anything else is built, and
+because they are testable in isolation (§4.7).
+
+#### 4.6.1 What the broker holds
+
+> The broker holds turn **identity**, not turn **history**.
+
+It needs exactly one durable fact beyond the spool: which `(turn_id, idempotency_key)` is
+currently in flight. That is what lets a reconnecting gateway ask *"did my prompt land?"*
+without resubmitting.
+
+It does **not** hold turn state transitions, completion records, or a queryable log. Those
+are projections and they live in the gateway, where they can be changed without restarting
+sessions.
+
+#### 4.6.2 Spool format invariants
+
+| # | Invariant |
+|---|---|
+| S1 | `broker_seq` starts at 1 per `(session_id, generation)`, increments strictly by 1, never skips, never reused |
+| S2 | One JSON object per line, newline-terminated |
+| S3 | A line without its terminating newline is **not committed** and must be ignored by readers |
+| S4 | On restart the broker truncates the file to the last newline before appending |
+| S5 | An offset is the byte position *after* the last complete newline consumed |
+| S6 | Spool directories are per `(session_id, generation)`; generations never share a file |
+
+S3 and S4 exist because `kill -9` mid-write leaves a truncated final line. Half-written JSON
+at EOF is the most common bug in append-only spool designs.
+
+#### 4.6.3 Exactly-once ingest
+
+The offset advance and the event insert are **one transaction**:
+
+```sql
+BEGIN IMMEDIATE;
+  INSERT INTO events (session_id, seq, ts, generation, broker_seq, ...)
+    VALUES (...)
+    ON CONFLICT(session_id, generation, broker_seq) DO NOTHING;   -- repeated per event
+  UPDATE sessions SET last_ingested_offset = :new_offset WHERE id = :session_id;
+COMMIT;
+```
+
+Crash mid-ingest → the offset did not move → re-ingest → the dedup index absorbs the
+overlap.
+
+This single property gives exactly-once ingest over an at-least-once channel. No other
+idempotency machinery is required, and none should be added.
+
+#### 4.6.4 Prompt submission ordering
+
+```
+gateway → PROMPT { turn_id, idempotency_key, content }
+
+broker:   1. write turn.accepted to spool
+          2. FSYNC                              ← must precede the confirm
+          3. forward to agent
+
+broker  → DELIVERY { turn_id, state: confirmed }
+```
+
+If the confirm precedes the fsync, a crash leaves the gateway believing delivery succeeded
+while the broker has no record of it. That is exactly how a turn gets executed twice.
+
+**On reconnect**, `HELLO_OK` returns the broker's current in-flight turn. The gateway
+compares it against its own open turns:
+
+| Broker | Gateway | Resolution |
+|---|---|---|
+| has turn T | T is `delivering`/`running` | already landed — **do not resubmit** |
+| no in-flight turn | T is `delivering` | **indeterminate** — human adjudication, never auto-retry |
+| has turn T | gateway has no T | ingest from spool; T is real |
+| no in-flight turn | no open turns | clean; proceed |
+
+#### 4.6.5 Generation semantics
+
+Ingest and projection follow **different** rules. Collapsing them is a bug.
+
+- **Ingest is generation-agnostic.** Events from generation N arriving after N+1 has started
+  are still written to the event log. They are history; discarding them puts holes in the
+  audit trail.
+- **Projection is generation-scoped.** The state projector applies only events where
+  `event.generation == sessions.generation`. A `turn.completed` from generation 41 does not
+  complete a turn in generation 42.
+
+#### 4.6.6 Broker admission
+
+A broker accepts at most one attached gateway. A second `HELLO` on an already-attached
+broker is **refused**, not queued — two gateway instances reconciling simultaneously would
+otherwise both attach and both advance offsets.
+
+The gateway holds a corresponding lock file at `$PRIME_HOME/gateway.lock` to make double
+starts fail fast rather than fail subtly.
+
+### 4.7 Testing the contract in isolation
+
+The contract above is testable without ACP and without any vendor agent. Build this harness
+**before** the real driver:
+
+```
+  test driver  ──►  broker  ──►  fake agent
+                                 (scripted event stream, deterministic timing)
+       │
+       └─ kill -9 on a timer, at controlled points
+```
+
+A fake agent that emits a scripted stream turns *"we think it's durable"* into a thing that
+runs in CI. See `docs/testing/durability.md` for the crash matrix.
 
 ---
 
@@ -861,8 +988,8 @@ Steps 1–4 are unglamorous and *are* the durability guarantee. Building channel
 | # | Milestone | Done when |
 |---|---|---|
 | 1 | Event log + snapshots + write-contention tuning | can replay a session's state from `events` alone |
-| 2 | Broker + tmux backend: `start`/`attach`/`probe`/`discover` + spool | kill the gateway mid-turn, restart, session continues |
-| 3 | Two-phase start + boot reconciliation | crash between phases, orphan is adopted not lost |
+| 2 | Fake-agent harness + broker + tmux backend: `start`/`attach`/`probe`/`discover` + spool | `docs/testing/durability.md` T-00 through T-06 pass in CI |
+| 3 | Two-phase start + boot reconciliation | T-07 through T-15 pass; crash between phases, orphan is adopted not lost |
 | 4 | Cold / rehydrate tiering | idle timeout exercises recovery continuously |
 | 5 | ACP driver, one agent end-to-end, resume declared in registry | resume works and falls back when the ID expires |
 | 6 | Approvals with policy engine + parking + cross-channel resolution | approve from web what Telegram asked |
