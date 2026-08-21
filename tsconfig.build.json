@@ -1,0 +1,11 @@
+{
+  // What ships. `tsconfig.json` type-checks the tests as well, which is what
+  // `npm run typecheck` is for -- but the tests spawn fake agents and import
+  // vitest, and neither belongs in a deployed image.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist"
+  },
+  "include": ["src/**/*.ts"]
+}
