@@ -601,7 +601,7 @@ ACP is not just one option among three. It already specifies most of what the ga
 
 1. **Replay ordering.** Agents stream `session/load` history as notifications *during* the request and respond only after the last one. Register your update routing **before** you await the RPC. Clients that listen only after the response resolves receive zero notifications. Zed does this correctly; Hermes shipped it wrong and patched it twice.
 
-2. **There is no `session/resume` or `session/close` method.** Resume is `session/load` + a capability flag. Close is process lifecycle, not a protocol call. Design accordingly.
+2. **`session/resume` and `session/close` exist, but do not remove the need for replay.** Both were added in ACP SDK 1.3.0; an earlier revision of this document claimed they did not exist. Two things follow. First, resume is capability-gated per agent, so `session/load` replay remains the fallback and `resume: native → replay` is the **only** sanctioned automatic degrade in the driver layer. Second, `session/close` is a protocol courtesy, not a durability boundary — the process can die without it, so teardown must stay idempotent and the log must remain authoritative. Never treat a successful `session/close` as evidence that a turn completed.
 
 3. **Vendor `_meta`.** `claude-agent-acp` carries subagent structure through `_meta.claudeCode.parentToolUseId` and `_meta.claudeCode.subagent`, opted into via `clientCapabilities._meta["subagent-transcript"]`. Policy: **store raw in the event log, project selectively.** Otherwise you either lose subagent structure or leak vendor shapes into channel adapters.
 
@@ -609,7 +609,7 @@ ACP is not just one option among three. It already specifies most of what the ga
 
 For agents with a JSON/JSONL mode but no ACP path. `claude -p --output-format stream-json --input-format stream-json` is the reference case.
 
-**Provider session ID is observed, never assumed.** Two independent confirmations that it can diverge from what you passed in: the CLI's interactive mode generates its own internal UUID for persistence separate from `--session-id`, and BotMux found the native ID can rotate mid-process, forcing them to watch transcripts and update their mapping. Therefore:
+**Provider session ID is observed, never assumed.** Two independent confirmations that it can diverge from what you passed in: the CLI's interactive mode generates its own internal UUID for persistence separate from `--session-id`, and existing bridges report the native ID rotating mid-process, forcing them to watch transcripts and update the mapping continuously. Therefore:
 
 ```
 provider.session_observed fires on EVERY sighting.
@@ -621,7 +621,7 @@ Also handle: the interactive resume dialog (`Would you like to resume? 1. Yes / 
 
 ### 6.4 PTY driver — fallback only, actively being deleted
 
-Everything about this path is a liability: ANSI redraws, spinner frames, bracketed paste, UTF-8 chunk boundaries, Enter vs Meta+Enter, readiness detection, typing throttle. BotMux's Claude adapter needed all of it just to accomplish "send this prompt."
+Everything about this path is a liability: ANSI redraws, spinner frames, bracketed paste, UTF-8 chunk boundaries, Enter vs Meta+Enter, readiness detection, typing throttle. Production PTY adapters for Claude Code run well past a thousand lines and need every one of those pieces just to accomplish "send this prompt."
 
 If you must ship it, the **delivery fence** is non-negotiable:
 
@@ -1039,6 +1039,6 @@ Milestone 7 is the real test. If adding the second agent requires touching the g
 | PTY-first driving | Enormous machinery for "send a prompt"; brittle against vendor UI changes |
 | Messages table as source of truth | No replay-from-offset, no audit, no multi-observer reconnect |
 | Default-deny on approval timeout | Silently kills multi-day work |
-| Separate ACP `session/resume` method | Doesn't exist — it's `session/load` plus a capability flag |
+| Relying on ACP `session/resume` alone | It exists (SDK 1.3.0) but is capability-gated per agent; `session/load` replay stays the fallback |
 | Postgres from day one | SQLite WAL handles single-node fine; migrate when multi-node is real |
 | Pooled brokers in v1 | One crash takes down N sessions |
