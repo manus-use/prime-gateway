@@ -404,6 +404,24 @@ describe('loadConfig: the agent process', () => {
     expect(cfg.agent.env).toEqual({ ANTHROPIC_API_KEY: 'sk-for-the-agent' });
   });
 
+  it('refuses a subcommand written into the command, from either source', () => {
+    // `command: bytesec acp` asks for a file whose name contains a space, because
+    // the agent is spawned with `shell: false`. It fails as an ENOENT at the first
+    // prompt -- long after boot, and reported as the agent not starting.
+    expect(() => load({}, yamlFile({ agent: { command: 'bytesec acp' } }))).toThrow(
+      /contains a space, and is not a path/,
+    );
+    // And says what to write instead, since the fix is not obvious from the symptom.
+    expect(() => load({ PGW_AGENT_COMMAND: 'bytesec acp' })).toThrow(
+      /command: bytesec, args: \[acp\]/,
+    );
+  });
+
+  it('allows a space in an absolute path, which is a real binary name', () => {
+    const cfg = load({ PGW_AGENT_COMMAND: '/Applications/My App/bin/agent' });
+    expect(cfg.agent.command).toBe('/Applications/My App/bin/agent');
+  });
+
   it('accepts arguments as a list or as one string', () => {
     expect(load({}, yamlFile({ agent: { args: ['--acp', '--debug'] } })).agent.args).toEqual([
       '--acp',

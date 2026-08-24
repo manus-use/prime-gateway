@@ -140,6 +140,21 @@ export function loadConfig(
     envString(env, 'PGW_AGENT_COMMAND') ??
     file.agent.command ??
     fail('an agent command is required: set agent.command in the config file, or PGW_AGENT_COMMAND');
+  if (/\s/.test(command) && !isAbsolute(command)) {
+    // `command: bytesec acp` is a subcommand written where the binary goes. The
+    // agent is spawned with `shell: false`, so this asks for a file whose name
+    // contains a space and fails as an ENOENT at the first prompt -- long after
+    // boot, and reported as the agent not starting rather than as a typo here.
+    //
+    // Absolute paths are exempt: `/Applications/My App/bin/agent` is a real thing,
+    // whereas a bare name resolved on PATH cannot usefully contain a space.
+    const [first = '', ...rest] = command.split(/\s+/);
+    throw new ConfigError(
+      `the agent command ${JSON.stringify(command)} contains a space, and is not a path. ` +
+        `Arguments belong in agent.args: command: ${first}, args: [${rest.join(', ')}]. ` +
+        'Use an absolute path if the binary really is named that.',
+    );
+  }
 
   const argsFromEnv = envString(env, 'PGW_AGENT_ARGS');
   const args = argsFromEnv === undefined ? file.agent.args : shellWords(argsFromEnv);
