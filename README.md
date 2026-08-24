@@ -99,7 +99,7 @@ file rather than names.
 | `workspace` | `PGW_WORKSPACE` | Absolute path the agent works in. Required. |
 | `agent.command` | `PGW_AGENT_COMMAND` | The ACP agent binary, e.g. `claude-agent-acp`. Required. |
 | `agent.args` | `PGW_AGENT_ARGS` | A list, or one string split on whitespace with quotes honoured. Not a shell: `$HOME` is not expanded, because the agent is spawned with `shell: false`. |
-| `agent.passEnv` | — | Variable **names** forwarded to the agent from the gateway's own environment. A name that is not set is an error, because forwarding nothing surfaces later as the agent failing to authenticate. |
+| `agent.passEnv` | — | Variable **names** forwarded to the agent from the gateway's own environment. A name that is not set is an error, because forwarding nothing surfaces later as the agent failing to authenticate. Leave it empty for a subscription-authenticated agent: its credentials are under `$HOME`, which is forwarded already. |
 | — | `PGW_AGENT_ENV_*` | Forwarded with the prefix stripped: `PGW_AGENT_ENV_ANTHROPIC_API_KEY` becomes `ANTHROPIC_API_KEY`. Wins over `passEnv`. Opt-in by prefix, because an agent holding the Feishu secret could post as the bot and answer its own approvals. |
 | `maxLiveSessions` | `PGW_MAX_LIVE_SESSIONS` | Concurrent agent processes. Default 8. |
 | `db`, `downloads` | `PGW_DB`, `PGW_DOWNLOAD_DIR` | Derived from `PGW_HOME` unless set. |

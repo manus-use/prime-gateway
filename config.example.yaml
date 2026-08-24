@@ -69,5 +69,10 @@ agent:
   # only -- the value stays in the environment. A name listed here that is not
   # set is an error, because forwarding nothing surfaces much later as the agent
   # failing to authenticate.
-  passEnv:
-    - ANTHROPIC_API_KEY
+  #
+  # Empty by default, and for a subscription-authenticated agent it should stay
+  # that way: the credentials are under $HOME, which is forwarded already. Only
+  # list a key here if the agent authenticates by API key.
+  passEnv: []
+  # passEnv:
+  #   - ANTHROPIC_API_KEY

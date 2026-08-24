@@ -458,14 +458,12 @@ describe('loadConfig: against a real file', () => {
       join(dir, 'config.yaml'),
     );
 
-    const cfg = loadConfig({
-      PGW_HOME: dir,
-      LARK_APP_SECRET: 'app-secret',
-      // The example names this in passEnv, and naming an unset variable is an error.
-      ANTHROPIC_API_KEY: 'sk-test',
-    });
+    // Nothing in the environment but the secret, which is the whole point: an
+    // example that only loads once you have also guessed at some variable is an
+    // example that fails on the first copy.
+    const cfg = loadConfig({ PGW_HOME: dir, LARK_APP_SECRET: 'app-secret' });
     expect(cfg.auth.ownerOpenId).toMatch(/^ou_/);
-    expect(cfg.agent.env).toEqual({ ANTHROPIC_API_KEY: 'sk-test' });
+    expect(cfg.agent.env).toEqual({});
     expect(cfg.maxLiveSessions).toBe(8);
   });
 
