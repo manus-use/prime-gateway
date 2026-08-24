@@ -6,6 +6,7 @@ import { sweepSeen } from './db/dedup.js';
 import { LarkAdapter } from './channel/lark/adapter.js';
 import { LarkInbound } from './channel/lark/inbound.js';
 import { createAcpDriver } from './driver/acp/driver.js';
+import { createCliDriver } from './driver/cli/driver.js';
 import { getDriver, registerDriver } from './driver/registry.js';
 import { Authorizer } from './policy/auth.js';
 import { Router } from './core/router.js';
@@ -64,6 +65,10 @@ export async function createGateway(config: GatewayConfig): Promise<Gateway> {
 
   // Registration is process-global, so a second `createGateway` in one process --
   // which is exactly what a test suite does -- must not fail on a duplicate.
+  //
+  // Both drivers are registered whichever one is selected: the registry is where
+  // "known but not implemented" is distinguished from "unknown", and that only
+  // works if what is built is what is registered.
   if (!getDriverSafely('acp')) {
     registerDriver('acp', () =>
       createAcpDriver({
@@ -74,7 +79,26 @@ export async function createGateway(config: GatewayConfig): Promise<Gateway> {
       }),
     );
   }
-  const driver = getDriver('acp');
+  if (!getDriverSafely('structured-cli')) {
+    registerDriver('structured-cli', () =>
+      createCliDriver({
+        command: config.agent.command,
+        args: config.agent.args,
+        env: config.agent.env,
+      }),
+    );
+  }
+  const driver = getDriver(config.agent.driver);
+  if (config.agent.unsupervised) {
+    // Loud, and every boot. The gateway's whole security story is that operating
+    // on the workspace requires a click, and under this driver it does not; an
+    // operator reading the log should not have to remember which driver implies
+    // that.
+    note(
+      `driver ${driver.id}: the agent acts without approval cards ` +
+        '(agent.unsupervised is set)',
+    );
+  }
 
   const adapter = new LarkAdapter({
     appId: config.lark.appId,

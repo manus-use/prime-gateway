@@ -25,7 +25,7 @@ they are what should stop the rule being "simplified" away later. See the append
 |---|---|
 | Broker sidecar (§4) | `ExecutionBackend` interface; runtime dies with the gateway for now |
 | Git worktrees | `workspaces.kind = 'plain-dir'` only; `kind` column already exists |
-| `structured-cli` driver | Declared registry key, no implementation |
+| `structured-cli` driver | Declared registry key, no implementation — since built, see §13 |
 | Snapshots | Table exists; renderer already reads a `(from_seq, to_seq)` range |
 | Multi-channel fan-out | `channel_bindings` is already many-per-session |
 
@@ -428,6 +428,16 @@ The counterweight is what CLI bridging actually requires in practice — submit-
 typing, transcript-fingerprint delivery fences, and screen-quiescence heuristics standing in for
 completion signals, running well past a thousand lines for one agent. The `AgentDriver` registry
 seam means a `structured-cli` driver can reclaim the gap later without redesign.
+
+**Since written:** that driver exists (`src/driver/cli/`), built because one agent's ACP server
+turned out to be broken while its command line worked. It cost ~600 lines and no change to
+`src/driver/types.ts`, which is the return on the seam. It does not reclaim the gap above, though —
+a structured CLI is not a TUI, and what it gives up instead is *approvals*: a command line has no
+permission protocol, so the driver can never emit a `permission-request` and the `operate` tier
+stops gating tool use. That is why selecting it requires `agent.unsupervised: true` in the config,
+refused for drivers that do ask. It also cannot resume, so continuity is reconstructed by composing
+the conversation into each prompt as a fenced transcript; such sessions report `replayed`, never
+`resumed`. ACP remains primary. This is the fallback, and it is a worse thing.
 
 ---
 

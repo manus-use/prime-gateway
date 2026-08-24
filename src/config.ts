@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
+import { KNOWN_DRIVERS, type KnownDriver } from './driver/registry.js';
 
 /**
  * The migrations that ship with this build, found relative to this module rather
@@ -65,10 +66,21 @@ export interface GatewayConfig {
   };
 
   agent: {
+    /** Which driver runs the agent. One of `KNOWN_DRIVERS`. */
+    driver: KnownDriver;
     command: string;
     args: readonly string[];
     /** Extra environment for the agent process. Where credentials go. */
     env: Readonly<Record<string, string>>;
+    /**
+     * The operator has accepted that the agent acts without asking.
+     *
+     * Required by `structured-cli`, which has no permission protocol, and refused
+     * by every driver that does. It is a written acknowledgement rather than a
+     * switch: a driver that quietly stops showing approval cards is a security
+     * posture nobody chose.
+     */
+    unsupervised: boolean;
   };
 
   /** Absolute path the agent works in. */
@@ -159,6 +171,11 @@ export function loadConfig(
   const argsFromEnv = envString(env, 'PGW_AGENT_ARGS');
   const args = argsFromEnv === undefined ? file.agent.args : shellWords(argsFromEnv);
 
+  const driver = driverOf(envString(env, 'PGW_AGENT_DRIVER') ?? file.agent.driver ?? 'acp');
+  const unsupervised =
+    envFlag(env, 'PGW_AGENT_UNSUPERVISED') ?? file.agent.unsupervised ?? false;
+  requireSupervisionMatch(driver, unsupervised);
+
   const allowTalk = envList(env, 'PGW_ALLOW_TALK') ?? file.auth.talk;
   const allowOperate = envList(env, 'PGW_ALLOW_OPERATE') ?? file.auth.operate;
 
@@ -194,14 +211,63 @@ export function loadConfig(
     },
 
     agent: {
+      driver,
       command,
       args,
       env: agentEnv(env, file.agent.passEnv),
+      unsupervised,
     },
 
     workspaceDir,
     maxLiveSessions: envInteger(env, 'PGW_MAX_LIVE_SESSIONS') ?? file.maxLiveSessions ?? 8,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Which driver, and on what terms
+// ---------------------------------------------------------------------------
+
+function driverOf(value: string): KnownDriver {
+  if ((KNOWN_DRIVERS as readonly string[]).includes(value)) return value as KnownDriver;
+  throw new ConfigError(
+    `agent.driver must be one of ${KNOWN_DRIVERS.join(', ')}, got ${JSON.stringify(value)}`,
+  );
+}
+
+/**
+ * Drivers that cannot ask before acting.
+ *
+ * Listed here rather than discovered from the driver, because this has to be
+ * decided at boot and getting it wrong is not recoverable later: by the time a
+ * driver could report "I have no permission protocol", the agent has already run.
+ */
+const UNSUPERVISED_DRIVERS: readonly KnownDriver[] = ['structured-cli'];
+
+/**
+ * The driver's supervision and the operator's acknowledgement have to agree.
+ *
+ * Both directions are errors. A driver with no approvals that nobody signed off on
+ * would silently stop showing approval cards -- the `operate` tier would still read
+ * as enforced in the config while enforcing nothing. And an acknowledgement next to
+ * a driver that *does* ask describes a system that is not the one running, which is
+ * how a config comes to be trusted for something it never said.
+ */
+function requireSupervisionMatch(driver: KnownDriver, unsupervised: boolean): void {
+  const needed = UNSUPERVISED_DRIVERS.includes(driver);
+  if (needed && !unsupervised) {
+    throw new ConfigError(
+      `the ${driver} driver runs the agent through its command line, which has no way to ` +
+        'ask for permission: it will edit files and run commands without an approval card, ' +
+        'and the operate allowlist will no longer gate tool use. Set agent.unsupervised: true ' +
+        'to accept that, or use the acp driver, which asks.',
+    );
+  }
+  if (!needed && unsupervised) {
+    throw new ConfigError(
+      `agent.unsupervised has no meaning for the ${driver} driver, which asks before acting. ` +
+        'Remove it, so the file does not claim a posture the gateway is not in.',
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +339,13 @@ interface FileConfig {
     directMessages: boolean | undefined;
     mentionAll: boolean | undefined;
   };
-  agent: { command: string | undefined; args: readonly string[]; passEnv: readonly string[] };
+  agent: {
+    driver: string | undefined;
+    command: string | undefined;
+    args: readonly string[];
+    passEnv: readonly string[];
+    unsupervised: boolean | undefined;
+  };
 }
 
 function emptyFile(): FileConfig {
@@ -291,7 +363,13 @@ function emptyFile(): FileConfig {
       directMessages: undefined,
       mentionAll: undefined,
     },
-    agent: { command: undefined, args: [], passEnv: [] },
+    agent: {
+      driver: undefined,
+      command: undefined,
+      args: [],
+      passEnv: [],
+      unsupervised: undefined,
+    },
   };
 }
 
@@ -331,7 +409,13 @@ function parseFile(path: string, text: string): FileConfig {
     'directMessages',
     'mentionAll',
   ]);
-  reject(path, 'agent', agentRaw, ['command', 'args', 'passEnv']);
+  reject(path, 'agent', agentRaw, [
+    'driver',
+    'command',
+    'args',
+    'passEnv',
+    'unsupervised',
+  ]);
 
   out.workspace = str(path, 'workspace', root['workspace']);
   out.db = str(path, 'db', root['db']);
@@ -353,12 +437,14 @@ function parseFile(path: string, text: string): FileConfig {
   };
 
   out.agent = {
+    driver: str(path, 'agent.driver', agentRaw['driver']),
     command: str(path, 'agent.command', agentRaw['command']),
     // A list or one string, because `args: --acp --debug` is what people write.
     args: Array.isArray(agentRaw['args'])
       ? strings(path, 'agent.args', agentRaw['args'])
       : shellWords(str(path, 'agent.args', agentRaw['args']) ?? ''),
     passEnv: strings(path, 'agent.passEnv', agentRaw['passEnv']),
+    unsupervised: bool(path, 'agent.unsupervised', agentRaw['unsupervised']),
   };
 
   return out;

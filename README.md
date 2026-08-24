@@ -97,8 +97,10 @@ file rather than names.
 | `auth.directMessages` | `PGW_ALLOW_DM` | Answer direct messages without a mention. Default on. |
 | `auth.mentionAll` | `PGW_ALLOW_MENTION_ALL` | Treat `@all` as addressing the bot. Default **off**: `@all` is a room-wide notification, not an instruction. |
 | `workspace` | `PGW_WORKSPACE` | Absolute path the agent works in. Required. |
-| `agent.command` | `PGW_AGENT_COMMAND` | The ACP agent binary, e.g. `claude-agent-acp`. Required. |
+| `agent.driver` | `PGW_AGENT_DRIVER` | `acp` (default) or `structured-cli`. See [Protocol strategy](#protocol-strategy) — the CLI driver cannot ask before acting. |
+| `agent.command` | `PGW_AGENT_COMMAND` | The agent binary, e.g. `claude-agent-acp`. Required. |
 | `agent.args` | `PGW_AGENT_ARGS` | A list, or one string split on whitespace with quotes honoured. Not a shell: `$HOME` is not expanded, because the agent is spawned with `shell: false`. |
+| `agent.unsupervised` | `PGW_AGENT_UNSUPERVISED` | Required by, and only by, `structured-cli`: a written acknowledgement that the agent acts with no approval card and no gate from `auth.operate`. Setting it alongside the `acp` driver is an error — a config must not claim a posture the gateway is not in. |
 | `agent.passEnv` | — | Variable **names** forwarded to the agent from the gateway's own environment. A name that is not set is an error, because forwarding nothing surfaces later as the agent failing to authenticate. Leave it empty for a subscription-authenticated agent: its credentials are under `$HOME`, which is forwarded already. |
 | — | `PGW_AGENT_ENV_*` | Forwarded with the prefix stripped: `PGW_AGENT_ENV_ANTHROPIC_API_KEY` becomes `ANTHROPIC_API_KEY`. Wins over `passEnv`. Opt-in by prefix, because an agent holding the Feishu secret could post as the bot and answer its own approvals. |
 | `maxLiveSessions` | `PGW_MAX_LIVE_SESSIONS` | Concurrent agent processes. Default 8. |
@@ -142,6 +144,7 @@ src/channel/            card writer, renderer, escaper
 src/core/               router, session actor, registry, status projection, lanes
 src/db/                 event log, sessions, turns, approvals, bindings, dedup
 src/driver/acp/         ACP client: spawn, initialize, resume, prompt, permissions
+src/driver/cli/         CLI fallback: one process per turn, argv in, NDJSON out
 src/policy/auth.ts      allowlist tiers and the silent-refusal rule
 src/config.ts           the file/environment split, validated at boot
 schema/                 migrations; the event log is the system of record
@@ -154,13 +157,14 @@ docs/testing/           crash matrix for the durability contract
 
 ```bash
 npm test          # unit: in-process, no network, no child processes
-npm run test:e2e  # spawns a hand-written fake ACP agent over stdio
+npm run test:e2e  # spawns hand-written fake agents, one per driver
 npm run typecheck
 ```
 
 The e2e suite exists for the failures only a separate process produces — an agent that
 exits mid-turn, one that refuses to initialize, one that advertises a capability it does
-not have. It has already found two driver bugs that in-process doubles cannot reach.
+not have, one that writes its logger output onto the same stdout it streams events on.
+It has already found two driver bugs that in-process doubles cannot reach.
 
 ## Reading order
 
@@ -173,15 +177,34 @@ not have. It has already found two driver bugs that in-process doubles cannot re
 
 ## Protocol strategy
 
-| Method | Preference |
-|---|---|
-| Agent with native ACP mode (`gemini --acp`) | primary |
-| Agent via ACP adapter (`claude-agent-acp`, `codex-acp`) | primary |
-| Structured CLI (`claude -p --output-format stream-json`) | fallback, registry key only |
-| PTY / TUI scraping | last resort, actively deprecated |
+| Method | Driver | Preference |
+|---|---|---|
+| Agent with native ACP mode (`gemini --acp`) | `acp` | primary |
+| Agent via ACP adapter (`claude-agent-acp`, `codex-acp`) | `acp` | primary |
+| Structured CLI (`bytesec run --format json`) | `structured-cli` | fallback |
+| PTY / TUI scraping | — | last resort, actively deprecated |
 
 ACP already specifies capability negotiation, sessions, streaming, cancellation, and
 permission requests. We don't reinvent it.
+
+The CLI driver exists because an agent's ACP server can be broken while its command
+line works perfectly, and being unable to talk to an agent at all is worse than
+talking to it badly. It is a genuinely worse thing, in three specific ways:
+
+- **No approvals.** A command line has no permission protocol — the agent never asks,
+  it just acts. Approval cards stop appearing and the `operate` tier stops gating tool
+  use. That is a security posture, not a rough edge, which is why `agent.unsupervised`
+  has to be written down before this driver will load.
+- **No resume.** Each turn is a fresh process with a fresh agent session, and the ids
+  it mints cannot be handed back. Continuity is reconstructed by composing the
+  conversation into the prompt as a fenced transcript, so the agent recovers what was
+  *said* but not the tool state behind it — and pays input tokens for it every turn.
+  Sessions started this way report `replayed`, never `resumed`.
+- **No cooperative cancel.** Cancelling kills the process, so work already done stands.
+
+Everything specific to a protocol stops at its driver. Adding the second one required
+no change to `src/driver/types.ts`, which is the return on declaring that seam while
+there was only one implementation behind it.
 
 ## References
 

@@ -445,6 +445,62 @@ describe('loadConfig: the agent process', () => {
   });
 });
 
+describe('loadConfig: which driver, and on what terms', () => {
+  it('defaults to the driver that can ask before acting', () => {
+    // ACP is primary. The CLI driver exists for when an agent's ACP server is
+    // broken, and defaulting to it would trade the approval flow away by accident.
+    expect(load().agent.driver).toBe('acp');
+    expect(load().agent.unsupervised).toBe(false);
+  });
+
+  it('selects a driver from the file or the environment', () => {
+    const file = yamlFile({ agent: { driver: 'structured-cli', unsupervised: true } });
+    expect(load({}, file).agent.driver).toBe('structured-cli');
+    expect(
+      load({ PGW_AGENT_DRIVER: 'structured-cli', PGW_AGENT_UNSUPERVISED: '1' }).agent.driver,
+    ).toBe('structured-cli');
+  });
+
+  it('names the drivers it has rather than accepting one it does not', () => {
+    expect(() => load({ PGW_AGENT_DRIVER: 'acp2' })).toThrow(
+      /must be one of acp, structured-cli/,
+    );
+  });
+
+  it('refuses a driver that cannot ask until someone writes down that they know', () => {
+    // The gateway's whole security story is that touching the workspace takes a
+    // click. Under this driver it does not, and a config that switched drivers
+    // without saying so would leave the `operate` tier reading as enforced while
+    // enforcing nothing.
+    expect(() => load({}, yamlFile({ agent: { driver: 'structured-cli' } }))).toThrow(
+      /no way to ask for permission/,
+    );
+    // And says what to write, since "use the other driver" is also a valid answer.
+    expect(() => load({ PGW_AGENT_DRIVER: 'structured-cli' })).toThrow(
+      /Set agent\.unsupervised: true to accept that, or use the acp driver/,
+    );
+  });
+
+  it('refuses an acknowledgement next to a driver that does ask', () => {
+    // Harmless in effect and dangerous as a document: it describes a system that is
+    // not the one running, which is how a config comes to be trusted for something
+    // it never said.
+    expect(() => load({}, yamlFile({ agent: { unsupervised: true } }))).toThrow(
+      /has no meaning for the acp driver/,
+    );
+  });
+
+  it('lets the environment turn supervision back on over a file that gave it up', () => {
+    // The emergency direction. Switching back to acp without also finding and
+    // deleting the file's acknowledgement would fail on the mismatch, which would
+    // make the safer setting the harder one to reach.
+    const file = yamlFile({ agent: { driver: 'structured-cli', unsupervised: true } });
+    const cfg = load({ PGW_AGENT_DRIVER: 'acp', PGW_AGENT_UNSUPERVISED: '0' }, file);
+    expect(cfg.agent.driver).toBe('acp');
+    expect(cfg.agent.unsupervised).toBe(false);
+  });
+});
+
 describe('loadConfig: against a real file', () => {
   const dirs: string[] = [];
 

@@ -57,13 +57,33 @@ auth:
   mentionAll: false
 
 agent:
-  # The ACP agent binary, on PATH or absolute.
+  # How the agent is run. Two choices:
+  #
+  #   acp             (default) One process per session, speaking ACP over stdio.
+  #                   The only driver that can carry a permission request, so it
+  #                   is the only one where approval cards and the operate tier
+  #                   mean anything. Use this.
+  #   structured-cli  One process per turn, prompt on the command line, output
+  #                   read back as JSON. For agents whose ACP server is broken.
+  #                   It cannot ask before acting and cannot resume a session --
+  #                   each turn re-sends the conversation as text -- so it costs
+  #                   both the approval flow and input tokens. Requires
+  #                   unsupervised: true below.
+  driver: acp
+
+  # The agent binary, on PATH or absolute.
   command: claude-agent-acp
 
   # A list, or one string split on whitespace with quotes honoured. Not a shell:
   # $HOME and $(...) are passed through literally, because the agent is spawned
   # with shell: false.
   args: []
+
+  # Required by, and only by, structured-cli. A written acknowledgement that the
+  # agent will edit files and run commands with no approval card and no gate from
+  # the operate allowlist. Setting it next to the acp driver is an error: a config
+  # must not claim a posture the gateway is not in.
+  # unsupervised: true
 
   # Variables forwarded to the agent from the gateway's own environment. Names
   # only -- the value stays in the environment. A name listed here that is not

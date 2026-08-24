@@ -3,11 +3,11 @@ import type { PermissionOption, TurnTerminal } from '../types.js';
 /**
  * The seam between the gateway core and whatever actually runs the agent.
  *
- * ACP is the only implementation today. This interface exists anyway, because
- * getting it wrong is expensive later: if the core imports ACP types directly,
- * every ACP concept becomes load-bearing gateway vocabulary, and a second driver
- * cannot be added without changing the core. Declaring the boundary while there
- * is one implementation costs a file; discovering it afterwards costs a rewrite.
+ * Declared while ACP was the only implementation, which is why it exists at all:
+ * if the core imported ACP types directly, every ACP concept would become
+ * load-bearing gateway vocabulary and a second driver could not be added without
+ * changing the core. That second driver (`./cli`) then arrived and needed no change
+ * here -- which is the return on a file written before it was strictly necessary.
  *
  * The interface is deliberately *narrower* than ACP. Anything ACP-specific --
  * capability negotiation, `session/load` replay, terminal handles -- stays behind
