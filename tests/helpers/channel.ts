@@ -41,8 +41,19 @@ export class FakeCard implements CardSession {
   readonly createdAt: number;
   readonly sets: string[] = [];
   readonly finishes: string[] = [];
+  /**
+   * Writes the freeze swallowed.
+   *
+   * A frozen card accepts `set` and does nothing with it -- no update, no error.
+   * This fake used to accept them like any other write, which made a whole class
+   * of bug invisible: the writer kept one card for a whole session, and every
+   * answer after the first went into a closed stream and was simply gone. Anything
+   * landing here is a lost message.
+   */
+  readonly droppedSets: string[] = [];
 
   readonly #owner: FakeChannel;
+  #frozen = false;
 
   constructor(owner: FakeChannel, messageId: string, createdAt: number) {
     this.#owner = owner;
@@ -52,12 +63,23 @@ export class FakeCard implements CardSession {
 
   async set(text: string): Promise<void> {
     this.#owner.calls.push('set');
+    // Before the gate, because the real adapter returns without reaching the
+    // network at all -- so this cannot fail, and cannot be held.
+    if (this.#frozen) {
+      this.droppedSets.push(text);
+      return;
+    }
     await this.#owner.gate('set');
     this.sets.push(text);
   }
 
   async finish(text: string): Promise<void> {
     this.#owner.calls.push('finish');
+    if (this.#frozen) return;
+    // Set before the gate: freezing is one-way in the real adapter, which marks
+    // the session closed and only then tries to deliver the final content. A
+    // failure there loses the last update, not the freeze.
+    this.#frozen = true;
     await this.#owner.gate('finish');
     this.finishes.push(text);
   }

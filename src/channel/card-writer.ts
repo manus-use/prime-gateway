@@ -6,9 +6,18 @@ import type { Clock } from '../time.js';
 import { systemClock } from '../time.js';
 
 /**
- * The single writer for one binding's card.
+ * The single writer for one binding's cards.
  *
- * Three properties, none optional:
+ * **One card per turn.** A Feishu streaming card is one stream, and the terminal
+ * that stops its typing indicator also closes it for good: `set` afterwards is
+ * accepted and discarded (see `CardSession.finish`). A writer that kept one card
+ * for the whole session therefore answered the first prompt and then swallowed
+ * every later one -- no error to retry, cursor advancing, the user looking at a
+ * frozen card and reporting "no response". Card identity is the turn the render
+ * belongs to, so a new prompt gets a new card and each reply is a reply to one
+ * question, the way a chat message is.
+ *
+ * Three further properties, none optional:
  *
  * 1. **Single-flight.** One request in flight per card, ever. The platform's write
  *    ordering does not decide which render is *current*, and delivery order is
@@ -62,6 +71,8 @@ export class CardWriter {
   #lastWriteAt = 0;
   #closed = false;
   #finished = false;
+  /** The `turnStartSeq` the open card belongs to. Meaningless while `#session` is unset. */
+  #cardTurn = 0;
 
   constructor(deps: CardWriterDeps) {
     this.#deps = deps;
@@ -137,23 +148,42 @@ export class CardWriter {
   }
 
   async #write(target: number): Promise<void> {
-    // Always rendered from seq 0: a render is a full replacement of the card, not
-    // an append to it.
+    // Read from seq 0, not from the cursor: a render is a full replacement of the
+    // card, not an append to it, and the renderer needs the whole turn to produce
+    // one. It scopes the result to the current turn itself.
     const events = this.#deps.readEvents(0, target);
     const view = renderCard(events);
 
     const existing = this.#session;
     const expired =
       existing !== undefined && this.#clock.now() - existing.createdAt > CARD_MAX_AGE_MS;
+    // Compared, rather than inferred from `#finished`: coalescing can put one
+    // turn's terminal and the next turn's answer in the same render, and that
+    // render belongs on a new card even though it is already finished.
+    const newTurn = existing !== undefined && view.turnStartSeq !== this.#cardTurn;
 
     let session = existing;
-    if (session === undefined || expired) {
+    if (session === undefined || expired || newTurn) {
+      // The card being left behind may still be streaming, if this render is the
+      // first sight of the new turn. Nothing will ever write to it again, so
+      // freeze it here or its typing indicator spins forever.
+      if (newTurn && !this.#finished && existing !== undefined) {
+        const before = renderCard(this.#deps.readEvents(0, view.turnStartSeq - 1));
+        try {
+          await existing.finish(before.text);
+        } catch {
+          // Best effort. Failing to tidy the old card must not cost the new one,
+          // which is the card the answer is actually going onto.
+        }
+      }
+      this.#finished = false;
       session = await this.#deps.channel.openCard(
         this.#deps.target,
         view.text,
         this.#deps.sendUuid(target),
       );
       this.#session = session;
+      this.#cardTurn = view.turnStartSeq;
       this.#deps.onCardChanged(session.messageId);
       // The initial text was already delivered by `openCard`, so a `set` here
       // would be a redundant round-trip -- but a finished view still has to be

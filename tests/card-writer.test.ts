@@ -29,6 +29,8 @@ interface Harness {
   /** Append one chunk and return the seq it landed at. */
   chunk(text: string): number;
   end(terminal: string): number;
+  /** Append a prompt, which is what starts a new card. */
+  submit(text: string): number;
   rendered: number[];
   cardChanges: Array<string | null>;
 }
@@ -66,6 +68,11 @@ function harness(): Harness {
     end(terminal: string): number {
       const seq = log.length + 1;
       log.push(ev(seq, 'turn_ended', { terminal }));
+      return seq;
+    },
+    submit(text: string): number {
+      const seq = log.length + 1;
+      log.push(ev(seq, 'turn_submitted', { text }));
       return seq;
     },
   };
@@ -257,6 +264,93 @@ describe('CardWriter', () => {
     await h.writer.flushNow();
 
     expect(h.channel.calls).toEqual(['openCard', 'finish']);
+  });
+
+  it('opens a new card for the next turn instead of writing to the frozen one', async () => {
+    // The failure this exists for, observed in production: the first prompt was
+    // answered and the next three looked unanswered. `set` on a frozen card is
+    // accepted and discarded, so nothing failed, the cursor advanced, and three
+    // real answers were gone with no error anywhere.
+    const h = harness();
+    h.chunk('first answer');
+    h.writer.want(h.end('completed'));
+    await h.writer.flushNow();
+    const firstCard = h.channel.lastCard;
+
+    h.submit('second ask');
+    h.writer.want(h.chunk('second answer'));
+    await h.writer.flushNow();
+
+    expect(h.channel.cards).toHaveLength(2);
+    expect(h.channel.lastCard).not.toBe(firstCard);
+    expect(h.channel.lastCard?.text).toContain('second answer');
+    // The whole point: nothing was written into the closed stream.
+    expect(firstCard?.droppedSets).toEqual([]);
+    expect(firstCard?.text).toContain('first answer');
+  });
+
+  it('shows the new reply on its own card, not under the previous answer', async () => {
+    const h = harness();
+    h.submit('first ask');
+    h.chunk('first answer');
+    h.writer.want(h.end('completed'));
+    await h.writer.flushNow();
+
+    h.submit('second ask');
+    h.writer.want(h.chunk('second answer'));
+    await h.writer.flushNow();
+
+    expect(h.channel.lastCard?.text).not.toContain('first answer');
+  });
+
+  it('freezes the card it is leaving behind', async () => {
+    // Coalescing can put the terminal and the next turn's first chunk in one
+    // render. Nothing will ever write to the old card again, so a card left
+    // streaming here keeps its typing indicator forever.
+    const h = harness();
+    h.writer.want(h.chunk('an answer'));
+    await h.writer.flushNow();
+    const first = h.channel.lastCard;
+
+    h.end('completed');
+    h.submit('next ask');
+    h.writer.want(h.chunk('the next answer'));
+    await h.writer.flushNow();
+
+    expect(h.channel.cards).toHaveLength(2);
+    expect(first?.finishes).toHaveLength(1);
+    // Frozen showing its own turn, not a preview of the next one.
+    expect(first?.text).toContain('an answer');
+    expect(first?.text).not.toContain('the next answer');
+  });
+
+  it('still opens the next card when tidying the old one fails', async () => {
+    // The old card is cosmetic; the new one carries the answer.
+    const h = harness();
+    h.writer.want(h.chunk('a'));
+    await h.writer.flushNow();
+
+    h.channel.failNext('finish', new ChannelError(230011, 'withdrawn', false));
+    h.submit('next');
+    h.writer.want(h.chunk('b'));
+    await h.writer.flushNow();
+
+    expect(h.channel.cards).toHaveLength(2);
+    expect(h.channel.lastCard?.text).toContain('b');
+  });
+
+  it('keeps one card for the whole of one turn', async () => {
+    const h = harness();
+    h.submit('ask');
+    h.writer.want(h.chunk('a'));
+    await h.writer.flushNow();
+    h.writer.want(h.chunk('b'));
+    await h.writer.flushNow();
+    h.writer.want(h.end('completed'));
+    await h.writer.flushNow();
+
+    expect(h.channel.cards).toHaveLength(1);
+    expect(h.channel.calls).toEqual(['openCard', 'set', 'finish']);
   });
 
   it('flushes what is outstanding before closing', async () => {

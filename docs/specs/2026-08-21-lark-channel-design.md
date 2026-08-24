@@ -72,9 +72,10 @@ ALTER TABLE channel_bindings ADD COLUMN card_created_at INTEGER;
   coexist in one chat without collision. Two bots @-mentioned in one message get two sessions.
 - **`revoked_at`** — `/new` revokes rather than deletes, so a late redelivery resolves to the
   revoked binding and is discarded instead of resurrecting a rotated session.
-- **`active_card_id` + `card_created_at`** — cardkit entities **expire after 14 days**. At >13
-  days, or on error `200750`, mint a fresh card and continue from `cursor_seq`. Unexercised path;
-  see §11.
+- **`active_card_id` + `card_created_at`** — the card currently being written to, which is the
+  current turn's (see §4.1). It is also how the 14-day limit is respected: cardkit entities
+  **expire after 14 days**, so at >13 days, or on error `200750`, mint a fresh card and continue
+  from `cursor_seq`. That expiry path is unexercised; see §11.
 
 ### 2.3 `approvals` additions
 
@@ -207,6 +208,15 @@ the result of a user's click.
 
 Card rebuilds are coalesced to ~1/s/session. Updates are last-write-wins, so intermediates are
 droppable by construction.
+
+**One card per turn, and the render is scoped to that turn.** A streaming card is one stream, and
+the terminal that stops its typing indicator closes it: an update afterwards is *accepted and
+discarded* — no change, no error. Reusing one card for a whole session therefore answered the first
+prompt and silently swallowed every later one, with the cursor advancing over answers nobody ever
+saw. Card identity is the `seq` of the `turn_submitted` a render belongs to; when that changes, the
+old card is frozen with its own final content and a new one is opened. Cheap to get wrong in the
+other direction too: inferring "new turn" from "already finished" misses the coalesced render that
+carries one turn's terminal and the next turn's first chunk together.
 
 ### 4.2 Send idempotency
 

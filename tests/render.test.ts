@@ -136,24 +136,43 @@ describe('renderCard', () => {
     expect(view.text).not.toContain('Error:');
   });
 
-  it('keeps the answers already on the card when a new turn starts', () => {
-    // One card per session, edited in place. Dropping earlier answers would
-    // delete the user's own history in front of them.
-    const view = renderCard([
+  it('renders one turn, not the session', () => {
+    // A card is the reply to one prompt. Accumulating answers ran them together
+    // as "first answersecond answer", grew against the budget forever, and
+    // eventually re-showed the whole history on any freshly opened card.
+    const events = [
       ev('turn_submitted', { text: 'first ask' }),
       ev('agent_message_chunk', { text: 'first answer' }),
       ev('turn_ended', { terminal: 'completed' }),
       ev('turn_submitted', { text: 'second ask' }),
       ev('agent_message_chunk', { text: 'second answer' }),
-    ]);
-    expect(view.text).toContain('first answer');
-    expect(view.text).toContain('second answer');
-    // Separated, or the two run together as "first answersecond answer" and read
-    // as one garbled reply.
-    expect(view.text).toBe('first answer\n\nsecond answer');
-    // And the card is live again: the previous turn's terminal must not leave it
-    // frozen with a typing indicator that never returns.
+    ];
+    const view = renderCard(events);
+    expect(view.text).toBe('second answer');
+    // Live again: the previous turn's terminal must not leave the new reply frozen.
     expect(view.finished).toBe(false);
+    // The earlier answer is not lost -- it is on the earlier card, and in the log.
+    expect(renderCard(events.slice(0, 3)).text).toBe('first answer');
+  });
+
+  it('names the turn it is rendering, so the writer knows which card it is for', () => {
+    const before = renderCard([ev('agent_message_chunk', { text: 'no turn yet' })]);
+    expect(before.turnStartSeq).toBe(0);
+
+    const start = ev('turn_submitted', { text: 'ask' });
+    const view = renderCard([start, ev('agent_message_chunk', { text: 'answer' })]);
+    expect(view.turnStartSeq).toBe(start.seq);
+  });
+
+  it('drops a previous turn’s unanswered approval notice', () => {
+    // The button belonged to work that is over. Pointing at it on a new reply
+    // sends the user hunting for a control that answers nothing.
+    const view = renderCard([
+      ev('approval_requested', { approvalId: 'a_1', action: 'rm -rf' }),
+      ev('turn_submitted', { text: 'next' }),
+      ev('agent_message_chunk', { text: 'working on it' }),
+    ]);
+    expect(view.text).not.toContain('Waiting for your approval');
   });
 
   it('drops the previous turn’s tool checklist', () => {

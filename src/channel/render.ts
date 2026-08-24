@@ -30,6 +30,15 @@ export interface RenderedCard {
   throughSeq: number;
   /** True when a turn terminal was seen, so the card can be frozen. */
   finished: boolean;
+  /**
+   * Seq of the `turn_submitted` this render belongs to; 0 before the first one.
+   *
+   * The writer's card identity. A render whose turn differs from the card's turn
+   * belongs on a new card, and that comparison has to be exact rather than
+   * inferred from `finished`: coalescing can put one turn's terminal and the next
+   * turn's answer in the same render.
+   */
+  turnStartSeq: number;
 }
 
 interface ToolLine {
@@ -42,14 +51,16 @@ interface ToolLine {
  *
  * `events` must be in seq order and must all belong to one session.
  *
- * The range is the whole session, so the fold has to distinguish the two kinds of
- * state it carries. Answer text accumulates: the card is one card for the session
- * and dropping earlier answers would delete the user's own history in place.
- * Everything describing *what is happening now* -- the error footer, the tool
- * checklist, the terminal -- belongs to the current turn and is reset when a new
- * prompt is submitted. Without that reset a single failure is stamped onto every
- * later card forever: a turn that streamed a perfectly good answer still renders
- * "Error: ..." underneath it, naming a driver the session no longer even uses.
+ * The range given is usually the whole session, but what comes out is **one
+ * turn**: everything resets at `turn_submitted`. A card is the reply to one
+ * prompt, the same way a chat message is, so carrying the previous turn's state
+ * forward would show the user answers, tool checklists and error footers that
+ * belong to a question they already had answered -- a turn that streamed
+ * perfectly still rendering "Error: ..." underneath it, naming a driver the
+ * session no longer even uses.
+ *
+ * The earlier history is not lost by this: it is on the earlier cards, which are
+ * still in the chat, and in the log, which is the system of record.
  */
 export function renderCard(events: readonly Event[]): RenderedCard {
   let message = '';
@@ -58,6 +69,7 @@ export function renderCard(events: readonly Event[]): RenderedCard {
   let finished = false;
   let terminal: string | undefined;
   let throughSeq = 0;
+  let turnStartSeq = 0;
   // Tracked so the placeholder can say *why* nothing is happening. A card reading
   // "Working…" while the agent is blocked on a button is how approvals sit
   // unanswered for hours: the user has no reason to look for one.
@@ -94,16 +106,15 @@ export function renderCard(events: readonly Event[]): RenderedCard {
         break;
       }
       case 'turn_submitted': {
-        // A new prompt supersedes the previous turn's status. The answer text is
-        // deliberately kept -- see the note on this function.
+        // A new prompt starts a new reply, so everything the previous one
+        // accumulated goes -- see the note on this function.
+        turnStartSeq = event.seq;
+        message = '';
         error = undefined;
         tools.clear();
         finished = false;
         terminal = undefined;
-        // Separated, because two answers accumulating into one card otherwise run
-        // together as "...anything else?How can I help?" -- which reads as one
-        // garbled reply rather than two turns.
-        if (message.trim() !== '') message = `${message.trimEnd()}\n\n`;
+        openApprovals.clear();
         break;
       }
       case 'agent_error': {
@@ -161,6 +172,7 @@ export function renderCard(events: readonly Event[]): RenderedCard {
     text: truncate(parts.join('\n\n'), CARD_TEXT_BUDGET),
     throughSeq,
     finished,
+    turnStartSeq,
   };
 }
 

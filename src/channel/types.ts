@@ -51,7 +51,16 @@ export interface CardSession {
    */
   set(text: string): Promise<void>;
 
-  /** Final content, then freeze. Idempotent; must not throw on a second call. */
+  /**
+   * Final content, then freeze. Idempotent; must not throw on a second call.
+   *
+   * One-way, and the card is dead afterwards: a Feishu streaming card is one
+   * stream, and closing it is what stops the typing indicator. A `set` after this
+   * is **inert** -- it neither updates the card nor reports a failure, because
+   * there is nothing left to fail against. A caller that keeps a finished session
+   * and keeps writing to it therefore loses every later write silently, which is
+   * why the writer opens a new card per turn rather than reusing this one.
+   */
   finish(text: string): Promise<void>;
 }
 
