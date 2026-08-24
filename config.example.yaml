@@ -1,0 +1,73 @@
+# prime-gateway configuration.
+#
+# Copy to $PGW_HOME/config.yaml (default ~/.prime-gateway/config.yaml), or point
+# PGW_CONFIG at it. Every setting here is also settable by environment variable,
+# and the environment wins -- so an emergency override never needs a file edit.
+#
+# CREDENTIALS DO NOT GO IN THIS FILE. The agent runs as the same user as the
+# gateway and is not sandboxed in this build, so anything on disk it can read. A
+# key that looks like a credential (secret, token, password, apiKey, ...) is
+# refused at boot rather than quietly accepted. Secrets live in the environment:
+#
+#   LARK_APP_SECRET=...            the Feishu app secret. Required.
+#   PGW_AGENT_ENV_<NAME>=...       passed to the agent as <NAME>.
+#
+# An unknown or misspelled key is an error, not a default.
+
+# Absolute path the agent works in. Every session shares it in this build.
+workspace: /srv/repo
+
+# Concurrent agent processes. Sessions beyond this stay cold until one frees up.
+maxLiveSessions: 8
+
+# SQLite file and the inbound attachment directory. Both default under $PGW_HOME.
+# db: /var/lib/prime/gateway.db
+# downloads: /var/lib/prime/downloads
+
+lark:
+  appId: cli_xxxxxxxxxxxxxxxx
+  # Feishu when omitted. Set for Lark:
+  # domain: https://open.larksuite.com
+
+auth:
+  # Always in both tiers below, whatever the lists say: an allowlist that
+  # excludes the owner locks out the only person who can fix it, and it is not
+  # editable from chat.
+  owner: ou_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+  # May prompt the agent. An empty list means the owner alone -- empty is
+  # CLOSED, never "no restrictions".
+  talk:
+    - ou_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa # Alice, platform team
+    - ou_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb # Bob
+
+  # May answer approval cards and run the mutating commands (/new, /attach).
+  # A strict subset of `talk` in most deployments.
+  operate:
+    - ou_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+  # Chats the bot will work in. Empty means any chat it has been added to.
+  chats: []
+
+  # Answer direct messages without needing a mention.
+  directMessages: true
+
+  # Treat @all as addressing the bot. Off, because @all is a room-wide
+  # notification and answering announcements is not what anyone wants.
+  mentionAll: false
+
+agent:
+  # The ACP agent binary, on PATH or absolute.
+  command: claude-agent-acp
+
+  # A list, or one string split on whitespace with quotes honoured. Not a shell:
+  # $HOME and $(...) are passed through literally, because the agent is spawned
+  # with shell: false.
+  args: []
+
+  # Variables forwarded to the agent from the gateway's own environment. Names
+  # only -- the value stays in the environment. A name listed here that is not
+  # set is an error, because forwarding nothing surfaces much later as the agent
+  # failing to authenticate.
+  passEnv:
+    - ANTHROPIC_API_KEY

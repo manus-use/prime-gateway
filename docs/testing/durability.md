@@ -147,7 +147,7 @@ Block the tmux control socket so `has-session` times out.
 
 **T-10 — double gateway start** &nbsp;·&nbsp; *contract 4.6.6*
 
-Launch two gateway instances against the same `$PRIME_HOME`.
+Launch two gateway instances against the same `$PGW_HOME`.
 
 - Second instance fails fast on the lock file
 - If it somehow reaches the broker, the broker refuses the second `HELLO`

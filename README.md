@@ -64,29 +64,59 @@ Create a custom app, then:
 
 ### Configuration
 
-Everything comes from the environment. Every required value is validated at boot; a
-configuration mistake prints one line and exits 78.
+Settings live in a YAML file; credentials live in the environment. Start from
+[`config.example.yaml`](config.example.yaml):
 
-| Variable | Required | Meaning |
+```bash
+cp config.example.yaml ~/.prime-gateway/config.yaml
+export LARK_APP_SECRET=...
+```
+
+`PGW_CONFIG` names the file if you keep it elsewhere; otherwise it is
+`$PGW_HOME/config.yaml`, default `~/.prime-gateway/config.yaml`. A file that is named but
+missing is an error, while the default location being absent is an ordinary
+environment-only deploy.
+
+**Credentials never go in the file.** The agent runs as the same user and is not sandboxed
+in this build, so anything on disk it can read. The environment is not airtight either — a
+same-uid process can read `/proc/<pid>/environ` on Linux — but it does not persist, is not
+backed up, cannot be copied into a worktree, and cannot be committed by accident. A key
+that looks like a credential (`secret`, `token`, `password`, `apiKey`, …) is refused at
+boot rather than quietly accepted, and so is `agent.env`, which would put values in the
+file rather than names.
+
+| File setting | Env override | Meaning |
 |---|---|---|
-| `LARK_APP_ID` / `LARK_APP_SECRET` | yes | App credentials. Never written to disk or the event log. |
-| `LARK_DOMAIN` | no | Set for Lark (`https://open.larksuite.com`); omitted means Feishu. |
-| `PRIME_OWNER_OPEN_ID` | yes | Your `open_id`. Always in both allowlists — an allowlist that excludes the owner locks out the only person who can fix it. |
-| `PRIME_WORKSPACE` | yes | Absolute path the agent works in. |
-| `PRIME_AGENT_COMMAND` | yes | The ACP agent binary, e.g. `claude-agent-acp`. |
-| `PRIME_AGENT_ARGS` | no | Arguments, split on whitespace, quotes honoured. Not a shell: `$HOME` is not expanded. |
-| `PRIME_AGENT_ENV_*` | no | Forwarded to the agent with the prefix stripped: `PRIME_AGENT_ENV_ANTHROPIC_API_KEY` becomes `ANTHROPIC_API_KEY`. Opt-in by prefix, because an agent holding the Feishu secret could post as the bot and answer its own approvals. |
-| `PRIME_HOME` | no | State directory. Default `~/.prime-gateway`. |
-| `PRIME_DB` / `PRIME_DOWNLOAD_DIR` | no | Derived from `PRIME_HOME` unless set. |
-| `PRIME_ALLOW_TALK` | no | Comma-separated `open_id`s that may prompt the agent. |
-| `PRIME_ALLOW_OPERATE` | no | Comma-separated `open_id`s that may answer approvals and run mutating commands. |
-| `PRIME_ALLOW_CHATS` | no | Comma-separated `chat_id`s. Empty means any chat. |
-| `PRIME_ALLOW_DM` | no | Answer direct messages without a mention. Default on. |
-| `PRIME_ALLOW_MENTION_ALL` | no | Treat `@all` as addressing the bot. Default **off**: `@all` is a room-wide notification, not an instruction. |
-| `PRIME_MAX_LIVE_SESSIONS` | no | Concurrent agent processes. Default 8. |
+| — | `LARK_APP_SECRET` **(required)** | The app secret. Environment only; never written to disk or the event log. |
+| `lark.appId` | `LARK_APP_ID` | App id. Required from one source or the other. |
+| `lark.domain` | `LARK_DOMAIN` | Set for Lark (`https://open.larksuite.com`); omitted means Feishu. |
+| `auth.owner` | `PGW_OWNER_OPEN_ID` | Your `open_id`. Required. Always in both allowlists — an allowlist that excludes the owner locks out the only person who can fix it. |
+| `auth.talk` | `PGW_ALLOW_TALK` | `open_id`s that may prompt the agent. |
+| `auth.operate` | `PGW_ALLOW_OPERATE` | `open_id`s that may answer approvals and run mutating commands. |
+| `auth.chats` | `PGW_ALLOW_CHATS` | `chat_id`s the bot will work in. Empty means any chat it was added to. |
+| `auth.directMessages` | `PGW_ALLOW_DM` | Answer direct messages without a mention. Default on. |
+| `auth.mentionAll` | `PGW_ALLOW_MENTION_ALL` | Treat `@all` as addressing the bot. Default **off**: `@all` is a room-wide notification, not an instruction. |
+| `workspace` | `PGW_WORKSPACE` | Absolute path the agent works in. Required. |
+| `agent.command` | `PGW_AGENT_COMMAND` | The ACP agent binary, e.g. `claude-agent-acp`. Required. |
+| `agent.args` | `PGW_AGENT_ARGS` | A list, or one string split on whitespace with quotes honoured. Not a shell: `$HOME` is not expanded, because the agent is spawned with `shell: false`. |
+| `agent.passEnv` | — | Variable **names** forwarded to the agent from the gateway's own environment. A name that is not set is an error, because forwarding nothing surfaces later as the agent failing to authenticate. |
+| — | `PGW_AGENT_ENV_*` | Forwarded with the prefix stripped: `PGW_AGENT_ENV_ANTHROPIC_API_KEY` becomes `ANTHROPIC_API_KEY`. Wins over `passEnv`. Opt-in by prefix, because an agent holding the Feishu secret could post as the bot and answer its own approvals. |
+| `maxLiveSessions` | `PGW_MAX_LIVE_SESSIONS` | Concurrent agent processes. Default 8. |
+| `db`, `downloads` | `PGW_DB`, `PGW_DOWNLOAD_DIR` | Derived from `PGW_HOME` unless set. |
+| — | `PGW_HOME` | State directory, and where the config file is looked for. Default `~/.prime-gateway`. |
 
-**Empty means closed.** An unset allowlist is everyone-except-the-owner, not
-no-restrictions.
+Three rules make a mistake fail loudly instead of silently:
+
+- **The environment wins.** Every file setting has an override, so a container needs no
+  file and an emergency lockdown needs no edit. Lists are *replaced*, not merged — merging
+  would leave no way to revoke. `PGW_ALLOW_TALK=` set-but-empty means the owner alone.
+- **Empty means closed.** An unset allowlist is everyone-except-the-owner, not
+  no-restrictions.
+- **An unknown key is an error.** A typo'd setting silently taking its default is how a
+  value someone deliberately changed turns out never to have applied — and for the auth
+  keys that failure is silent *and* permissive.
+
+Everything is validated at boot; a configuration mistake prints one line and exits 78.
 
 ### Chat commands
 
@@ -113,6 +143,7 @@ src/core/               router, session actor, registry, status projection, lane
 src/db/                 event log, sessions, turns, approvals, bindings, dedup
 src/driver/acp/         ACP client: spawn, initialize, resume, prompt, permissions
 src/policy/auth.ts      allowlist tiers and the silent-refusal rule
+src/config.ts           the file/environment split, validated at boot
 schema/                 migrations; the event log is the system of record
 docs/architecture.md    full design document
 docs/specs/             the Lark channel design

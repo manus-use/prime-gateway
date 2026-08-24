@@ -18,7 +18,8 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "^1.4.0",
     "@larksuiteoapi/node-sdk": "^1.73.0",
-    "better-sqlite3": "^11.8.1"
+    "better-sqlite3": "^11.8.1",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",

@@ -46,6 +46,15 @@ export async function createGateway(config: GatewayConfig): Promise<Gateway> {
     process.stderr.write(`${new Date().toISOString()} ${line}\n`);
   };
 
+  // Which file the settings came from, first thing: the default location is derived,
+  // and a gateway reading a file the operator did not mean is indistinguishable from
+  // one whose settings are being ignored.
+  note(
+    config.configPath === undefined
+      ? 'no config file; settings from the environment alone'
+      : `settings from ${config.configPath}, environment overrides applied`,
+  );
+
   await mkdir(dirname(config.dbPath), { recursive: true, mode: 0o700 });
   await mkdir(config.downloadDir, { recursive: true, mode: 0o700 });
 

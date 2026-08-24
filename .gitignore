@@ -19,6 +19,9 @@ __pycache__/
 .env.*
 !.env.example
 
+# a local config file names real chats and open_ids; the example is the committed one
+/config.yaml
+
 # editors / os
 .DS_Store
 .idea/

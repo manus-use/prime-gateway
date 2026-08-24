@@ -118,7 +118,7 @@ Most combinations are legal. The illegal ones are declared as compatibility cons
 
 ## 3. Core data model
 
-SQLite, WAL mode, single file at `$PRIME_HOME/prime.db`.
+SQLite, WAL mode, single file at `$PGW_HOME/prime.db`.
 
 ### 3.1 The event log
 
@@ -364,7 +364,7 @@ Keep it dumb. Every ounce of intelligence in the broker is intelligence you can'
 ### 4.3 The spool
 
 ```
-$PRIME_HOME/sessions/<session_id>/<generation>/
+$PGW_HOME/sessions/<session_id>/<generation>/
   ├── spool.ndjson       # one event per line, append-only, fsync-batched
   ├── raw/               # tool output, terminal output — referenced by chunk_ref
   └── broker.sock        # control socket
@@ -494,7 +494,7 @@ A broker accepts at most one attached gateway. A second `HELLO` on an already-at
 broker is **refused**, not queued — two gateway instances reconciling simultaneously would
 otherwise both attach and both advance offsets.
 
-The gateway holds a corresponding lock file at `$PRIME_HOME/gateway.lock` to make double
+The gateway holds a corresponding lock file at `$PGW_HOME/gateway.lock` to make double
 starts fail fast rather than fail subtly.
 
 ### 4.7 Testing the contract in isolation
@@ -796,7 +796,7 @@ Do **not** guess. For filesystem effects, the workspace checkpoint (§9) lets yo
 
 ```
 repo/                              # bare or primary clone
-$PRIME_HOME/workspaces/ws_42/      # worktree, branch prime/ses_8f72
+$PGW_HOME/workspaces/ws_42/      # worktree, branch prime/ses_8f72
 ```
 
 - **`root_path` is immutable for the workspace's lifetime.** Claude Code's session lookup is project-directory-scoped, so relocating a worktree orphans the provider session. Record it once, never move it.
