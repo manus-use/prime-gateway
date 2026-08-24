@@ -118,6 +118,55 @@ describe('renderCard', () => {
     expect(view.text).not.toContain('first');
   });
 
+  it('does not blame a new turn for the previous turn’s failure', () => {
+    // The card renders the whole session from seq 0, so without a reset one bad
+    // turn is stamped onto every later card forever -- an answer that streamed
+    // perfectly still carries "Error: ..." underneath it, often naming a driver
+    // the session no longer uses. Observed in production, not hypothetical.
+    const view = renderCard([
+      ev('turn_submitted', { text: 'first ask' }),
+      ev('agent_error', { message: 'ACP session failed to start', retryable: true }),
+      ev('turn_ended', { terminal: 'failed' }),
+      ev('turn_submitted', { text: 'second ask' }),
+      ev('agent_message_chunk', { text: 'a good answer' }),
+      ev('turn_ended', { terminal: 'completed' }),
+    ]);
+    expect(view.text).toContain('a good answer');
+    expect(view.text).not.toContain('ACP session failed');
+    expect(view.text).not.toContain('Error:');
+  });
+
+  it('keeps the answers already on the card when a new turn starts', () => {
+    // One card per session, edited in place. Dropping earlier answers would
+    // delete the user's own history in front of them.
+    const view = renderCard([
+      ev('turn_submitted', { text: 'first ask' }),
+      ev('agent_message_chunk', { text: 'first answer' }),
+      ev('turn_ended', { terminal: 'completed' }),
+      ev('turn_submitted', { text: 'second ask' }),
+      ev('agent_message_chunk', { text: 'second answer' }),
+    ]);
+    expect(view.text).toContain('first answer');
+    expect(view.text).toContain('second answer');
+    // Separated, or the two run together as "first answersecond answer" and read
+    // as one garbled reply.
+    expect(view.text).toBe('first answer\n\nsecond answer');
+    // And the card is live again: the previous turn's terminal must not leave it
+    // frozen with a typing indicator that never returns.
+    expect(view.finished).toBe(false);
+  });
+
+  it('drops the previous turn’s tool checklist', () => {
+    // Tools are progress, not content. An old turn's checklist decorating a new
+    // answer reads as work this turn did.
+    const view = renderCard([
+      ev('tool_call', { toolCallId: 'c1', title: 'Bash', status: 'completed' }),
+      ev('turn_submitted', { text: 'next' }),
+      ev('agent_message_chunk', { text: 'no tools this time' }),
+    ]);
+    expect(view.text).not.toContain('Bash');
+  });
+
   it('reports the highest seq it included', () => {
     const events = [ev('agent_message_chunk', { text: 'a' }), ev('agent_message_chunk', { text: 'b' })];
     expect(renderCard(events).throughSeq).toBe(events[1]?.seq);

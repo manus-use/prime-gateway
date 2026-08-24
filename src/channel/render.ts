@@ -41,6 +41,15 @@ interface ToolLine {
  * Build the card body from events up to and including `throughSeq`.
  *
  * `events` must be in seq order and must all belong to one session.
+ *
+ * The range is the whole session, so the fold has to distinguish the two kinds of
+ * state it carries. Answer text accumulates: the card is one card for the session
+ * and dropping earlier answers would delete the user's own history in place.
+ * Everything describing *what is happening now* -- the error footer, the tool
+ * checklist, the terminal -- belongs to the current turn and is reset when a new
+ * prompt is submitted. Without that reset a single failure is stamped onto every
+ * later card forever: a turn that streamed a perfectly good answer still renders
+ * "Error: ..." underneath it, naming a driver the session no longer even uses.
  */
 export function renderCard(events: readonly Event[]): RenderedCard {
   let message = '';
@@ -82,6 +91,19 @@ export function renderCard(events: readonly Event[]): RenderedCard {
           title: existing?.title ?? id,
           status: String(payload?.['status'] ?? existing?.status ?? 'pending'),
         });
+        break;
+      }
+      case 'turn_submitted': {
+        // A new prompt supersedes the previous turn's status. The answer text is
+        // deliberately kept -- see the note on this function.
+        error = undefined;
+        tools.clear();
+        finished = false;
+        terminal = undefined;
+        // Separated, because two answers accumulating into one card otherwise run
+        // together as "...anything else?How can I help?" -- which reads as one
+        // garbled reply rather than two turns.
+        if (message.trim() !== '') message = `${message.trimEnd()}\n\n`;
         break;
       }
       case 'agent_error': {
