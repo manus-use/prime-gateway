@@ -14,6 +14,7 @@
  *   permission  ask for permission, report the option that came back
  *   refusal     end the turn with stopReason `refusal`
  *   silent      write to stderr, send no updates, and report end_turn anyway
+ *   banner-only write to stderr at start-up only, then an empty end_turn
  *   noise       send updates the gateway has no projection for, then end_turn
  *   hang        never answer the prompt until `session/cancel` arrives
  *   crash       exit mid-turn without answering
@@ -111,6 +112,13 @@ async function runPrompt(id, params) {
       result(id, { stopReason: 'refusal' });
       return;
 
+    case 'banner-only':
+      // Wrote at start-up, said nothing during the turn. The banner is still in
+      // the ring buffer, and quoting it would blame the credentials for this.
+      pendingPrompt = null;
+      result(id, { stopReason: 'end_turn' });
+      return;
+
     case 'silent':
       // Fails internally, says nothing, and reports success anyway. A real agent
       // does this when its configured model does not exist.
@@ -193,6 +201,9 @@ async function handle(message) {
   switch (method) {
     case 'initialize':
       record({ method });
+      if (MODE === 'banner-only') {
+        process.stderr.write('Authenticated as: someone (via OIDC)\n');
+      }
       if (MODE === 'bad-init') {
         process.stderr.write('fake agent cannot initialize: no credentials\n');
         failure(id, 'initialize refused');

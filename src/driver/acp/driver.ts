@@ -169,6 +169,8 @@ class AcpRuntime implements AgentRuntime {
   #exit: { code: number | null } | undefined;
   /** Updates delivered during the current turn. Zero of them is a signal. */
   #emitted = 0;
+  /** stderr byte count when the current turn started, to scope the tail to it. */
+  #stderrMark = 0;
 
   constructor(proc: SpawnedAgent) {
     this.#proc = proc;
@@ -298,6 +300,7 @@ class AcpRuntime implements AgentRuntime {
     const queue = new EventQueue();
     this.#turn = queue;
     this.#emitted = 0;
+    this.#stderrMark = this.#proc.stderrBytes();
 
     const blocks: ContentBlock[] = [{ type: 'text', text: input.text }];
     for (const path of input.paths) {
@@ -365,19 +368,29 @@ class AcpRuntime implements AgentRuntime {
    * `end_turn`: a bad model id, an expired credential, a tool that threw. The
    * protocol says the turn ended, the card says "finished with no output", and
    * the explanation is sitting in stderr where nobody sees it. That combination
-   * -- a clean terminal, zero updates, and a process that wrote to stderr -- is
-   * not a turn with nothing to say, so hand over what the agent said instead.
+   * -- a clean terminal, zero updates, and stderr written *during the turn* --
+   * is not a turn with nothing to say, so hand over what the agent said.
    *
-   * Not an error terminal: the agent claimed success and we have no standing to
-   * overrule it. This only adds the evidence.
+   * Only what the turn itself wrote. The tail is a ring buffer that outlives the
+   * turn, so a start-up banner ("Authenticated as ...") is still in it long
+   * afterwards, and quoting that as the reason for a later empty turn sends
+   * someone off debugging their credentials. Nothing written during the turn
+   * means no evidence, and saying nothing beats inventing a cause.
+   *
+   * Not an error terminal either: the agent claimed success and we have no
+   * standing to overrule it. This only adds the evidence.
    */
   #silentTurnError(): Extract<DriverEvent, { kind: 'error' }> | undefined {
     if (this.#emitted > 0) return undefined;
-    const tail = this.#proc.stderrTail().trim();
-    if (tail === '') return undefined;
+    const added = this.#proc.stderrBytes() - this.#stderrMark;
+    if (added <= 0) return undefined;
+    const tail = this.#proc.stderrTail();
+    const during = tail.slice(Math.max(0, tail.length - added)).trim();
+    if (during === '') return undefined;
     return {
       kind: 'error',
-      message: `the agent reported success but produced no output, and wrote: ${tail.slice(-500)}`,
+      message:
+        'the agent reported success but produced no output, and wrote: ' + during.slice(-500),
       // Nothing here says the work was impossible -- a bad model id is fixed by
       // configuration, and the same prompt then succeeds.
       retryable: true,

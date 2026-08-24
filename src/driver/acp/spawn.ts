@@ -100,6 +100,14 @@ export interface SpawnedAgent {
   exited: Promise<number | null>;
   /** Most recent stderr, ring-buffered. The only diagnostic when spawn misfires. */
   stderrTail(): string;
+  /**
+   * Total bytes ever written to stderr.
+   *
+   * Lets a caller tell what arrived during some window from what was already
+   * there. Without it, a startup banner still sitting in the ring buffer looks
+   * like the explanation for a failure that happened minutes later.
+   */
+  stderrBytes(): number;
   /** Idempotent. SIGTERM, then SIGKILL after a grace period. */
   kill(): Promise<void>;
 }
@@ -129,8 +137,10 @@ export function spawnAgent(opts: SpawnOptions): SpawnedAgent {
   ) as ChildProcessByStdio<Writable, Readable, Readable>;
 
   let stderrTail = '';
+  let stderrBytes = 0;
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (chunk: string) => {
+    stderrBytes += chunk.length;
     stderrTail = (stderrTail + chunk).slice(-STDERR_TAIL_BYTES);
   });
 
@@ -165,5 +175,11 @@ export function spawnAgent(opts: SpawnOptions): SpawnedAgent {
     return killing;
   };
 
-  return { stream, exited, stderrTail: () => stderrTail, kill };
+  return {
+    stream,
+    exited,
+    stderrTail: () => stderrTail,
+    stderrBytes: () => stderrBytes,
+    kill,
+  };
 }

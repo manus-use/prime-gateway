@@ -218,6 +218,15 @@ describe('ACP driver: a turn', () => {
     expect(error.retryable).toBe(true);
   });
 
+  it('does not blame a start-up banner for a later empty turn', async () => {
+    // The tail is a ring buffer that outlives the turn, so an agent's "Authenticated
+    // as ..." line is still in it much later. Quoting it as the reason for an empty
+    // turn sends someone off checking credentials that were never the problem.
+    const s = await start('banner-only');
+    const events = await collect(s.runtime.prompt({ text: 'hello', paths: [] }));
+    expect(kinds(events)).toEqual(['turn-ended']);
+  });
+
   it('stays quiet when a turn legitimately has nothing to say', async () => {
     // `refusal` produces no updates either, but writes no stderr. Reporting an
     // error there would make every empty turn look like a malfunction.
