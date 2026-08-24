@@ -13,6 +13,7 @@
  *   basic       stream two message chunks and a tool call, then end_turn
  *   permission  ask for permission, report the option that came back
  *   refusal     end the turn with stopReason `refusal`
+ *   silent      write to stderr, send no updates, and report end_turn anyway
  *   noise       send updates the gateway has no projection for, then end_turn
  *   hang        never answer the prompt until `session/cancel` arrives
  *   crash       exit mid-turn without answering
@@ -108,6 +109,14 @@ async function runPrompt(id, params) {
     case 'refusal':
       pendingPrompt = null;
       result(id, { stopReason: 'refusal' });
+      return;
+
+    case 'silent':
+      // Fails internally, says nothing, and reports success anyway. A real agent
+      // does this when its configured model does not exist.
+      process.stderr.write('ProviderModelNotFoundError: no such model "big-pickle"\n');
+      pendingPrompt = null;
+      result(id, { stopReason: 'end_turn' });
       return;
 
     case 'noise':

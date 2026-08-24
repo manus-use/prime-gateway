@@ -167,6 +167,8 @@ class AcpRuntime implements AgentRuntime {
   #closed = false;
   /** Set once the child is gone, so a failing prompt can tell why. */
   #exit: { code: number | null } | undefined;
+  /** Updates delivered during the current turn. Zero of them is a signal. */
+  #emitted = 0;
 
   constructor(proc: SpawnedAgent) {
     this.#proc = proc;
@@ -295,6 +297,7 @@ class AcpRuntime implements AgentRuntime {
 
     const queue = new EventQueue();
     this.#turn = queue;
+    this.#emitted = 0;
 
     const blocks: ContentBlock[] = [{ type: 'text', text: input.text }];
     for (const path of input.paths) {
@@ -308,6 +311,8 @@ class AcpRuntime implements AgentRuntime {
           sessionId,
           prompt: blocks,
         });
+        const silent = this.#silentTurnError();
+        if (silent !== undefined) queue.push(silent);
         queue.push({ kind: 'turn-ended', terminal: terminalFor(response.stopReason) });
       } catch (err) {
         // Whether this was the agent failing a request or the process dying under
@@ -353,6 +358,32 @@ class AcpRuntime implements AgentRuntime {
     return this.#exit;
   }
 
+  /**
+   * The diagnostic for a turn that reported success and produced nothing.
+   *
+   * An agent can fail internally and still answer `session/prompt` with
+   * `end_turn`: a bad model id, an expired credential, a tool that threw. The
+   * protocol says the turn ended, the card says "finished with no output", and
+   * the explanation is sitting in stderr where nobody sees it. That combination
+   * -- a clean terminal, zero updates, and a process that wrote to stderr -- is
+   * not a turn with nothing to say, so hand over what the agent said instead.
+   *
+   * Not an error terminal: the agent claimed success and we have no standing to
+   * overrule it. This only adds the evidence.
+   */
+  #silentTurnError(): Extract<DriverEvent, { kind: 'error' }> | undefined {
+    if (this.#emitted > 0) return undefined;
+    const tail = this.#proc.stderrTail().trim();
+    if (tail === '') return undefined;
+    return {
+      kind: 'error',
+      message: `the agent reported success but produced no output, and wrote: ${tail.slice(-500)}`,
+      // Nothing here says the work was impossible -- a bad model id is fixed by
+      // configuration, and the same prompt then succeeds.
+      retryable: true,
+    };
+  }
+
   #exitError(code: number | null): Extract<DriverEvent, { kind: 'error' }> {
     const tail = this.#proc.stderrTail().trim();
     return {
@@ -373,7 +404,10 @@ class AcpRuntime implements AgentRuntime {
     // history as the first thing the next turn emits.
     if (queue === undefined) return;
     const event = toDriverEvent(params.update);
-    if (event !== undefined) queue.push(event);
+    if (event !== undefined) {
+      this.#emitted += 1;
+      queue.push(event);
+    }
   }
 
   /**

@@ -202,6 +202,30 @@ describe('ACP driver: a turn', () => {
     expect(events).toEqual([{ kind: 'turn-ended', terminal: 'completed' }]);
   });
 
+  it('hands over stderr when a turn reports success and produced nothing', async () => {
+    const s = await start('silent');
+    const events = await collect(s.runtime.prompt({ text: "what's your model?", paths: [] }));
+    // A clean terminal with zero updates and a process that wrote to stderr is not
+    // a turn with nothing to say. Without this the card reads "finished with no
+    // output" while the explanation sits in a pipe nobody reads.
+    expect(kinds(events)).toEqual(['error', 'turn-ended']);
+    const error = events[0] as { kind: 'error'; message: string; retryable: boolean };
+    expect(error.message).toContain('ProviderModelNotFoundError');
+    // The agent claimed success, so the terminal stands: this adds evidence rather
+    // than overruling it.
+    expect(events[1]).toEqual({ kind: 'turn-ended', terminal: 'completed' });
+    // Configuration is fixable, and the same prompt then works.
+    expect(error.retryable).toBe(true);
+  });
+
+  it('stays quiet when a turn legitimately has nothing to say', async () => {
+    // `refusal` produces no updates either, but writes no stderr. Reporting an
+    // error there would make every empty turn look like a malfunction.
+    const s = await start('refusal');
+    const events = await collect(s.runtime.prompt({ text: 'do something bad', paths: [] }));
+    expect(kinds(events)).toEqual(['turn-ended']);
+  });
+
   it('drops updates it has no projection for and keeps the ones it has', async () => {
     const s = await start('noise');
     const events = await collect(s.runtime.prompt({ text: 'go', paths: [] }));
