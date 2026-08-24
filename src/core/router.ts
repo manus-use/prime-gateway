@@ -468,7 +468,14 @@ export class Router {
   ): void {
     const binding = resolveBinding(this.#deps.db, key);
     if (binding === undefined) {
-      this.#note(`rejected ${message.messageId} (${reason}) with no bound session`);
+      // The sender's open_id, because without it this line cannot be acted on: the
+      // first-run failure is an owner id that does not match, and the id needed to
+      // fix it is the one being refused. It is the same field the event payload
+      // below records, and metadata rather than content either way.
+      this.#note(
+        `rejected ${message.messageId} from ${message.sender.openId} ` +
+          `in ${key.conversationId} (${reason}) with no bound session`,
+      );
       return;
     }
     appendEvent(

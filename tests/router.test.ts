@@ -241,7 +241,11 @@ describe('Router: refusals', () => {
     // Otherwise an unauthorized sender allocates sessions by being refused, which
     // is a denial-of-service with extra steps.
     expect(sessionCount(h)).toBe(0);
-    expect(h.notes.some((n) => n.includes('with no bound session'))).toBe(true);
+    // Naming the sender is the point of the line: the first-run failure is an owner
+    // id that does not match, and the id needed to fix it is the one being refused.
+    const note = h.notes.find((n) => n.includes('with no bound session'));
+    expect(note).toBeDefined();
+    expect(note).toContain(GUEST.openId);
   });
 
   it('logs a refusal into the session that already exists, sender only', async () => {
